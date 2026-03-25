@@ -40,7 +40,9 @@ import java.io.File;
 import java.io.IOException;
 import java.net.URISyntaxException;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -241,6 +243,88 @@ public class TestParquetReader
 
         assertThatThrownBy(() -> MetadataReader.readFooter(dataSource, DataSize.ofBytes(1000), Optional.empty()))
                 .hasMessageMatching(".* Parquet footer size .* exceeds maximum allowed size .*");
+    }
+
+    @Test
+    public void testRowNumbersWithColumnIndexFiltering()
+            throws URISyntaxException, IOException
+    {
+        // This test verifies that row numbers (physical file positions) are correct
+        // when column index filtering skips pages. Without the fix, row numbers would
+        // reflect filtered positions instead of physical positions, causing
+        // DELETE/UPDATE/MERGE operations to target wrong rows.
+        List<String> columnNames = ImmutableList.of("l_shipdate");
+        List<Type> types = ImmutableList.of(DATE);
+
+        File file = new File(Resources.getResource("lineitem_sorted_by_shipdate/data.parquet").toURI());
+
+        // Step 1: Read all rows without filtering to build a map of rowNumber -> data value
+        Map<Long, Long> unfilteredRowData = new HashMap<>();
+        ParquetDataSource unfilteredSource = new FileParquetDataSource(file, ParquetReaderOptions.defaultOptions());
+        ParquetMetadata unfilteredMetadata = MetadataReader.readFooter(unfilteredSource, Optional.empty());
+        try (ParquetReader reader = createParquetReader(
+                unfilteredSource, unfilteredMetadata, ParquetReaderOptions.defaultOptions(),
+                newSimpleAggregatedMemoryContext(), types, columnNames, TupleDomain.all(), true)) {
+            int rowNumberColumnIndex = types.size(); // row number is appended after data columns
+            SourcePage page = reader.nextPage();
+            while (page != null) {
+                Block dataBlock = page.getBlock(0);
+                Block rowNumberBlock = page.getBlock(rowNumberColumnIndex);
+                for (int i = 0; i < page.getPositionCount(); i++) {
+                    long rowNumber = BIGINT.getLong(rowNumberBlock, i);
+                    long dateValue = DATE.getLong(dataBlock, i);
+                    unfilteredRowData.put(rowNumber, dateValue);
+                }
+                page = reader.nextPage();
+            }
+        }
+        assertThat(unfilteredRowData).isNotEmpty();
+
+        // Step 2: Read with a predicate that triggers column index filtering
+        TupleDomain<String> predicate = TupleDomain.withColumnDomains(
+                ImmutableMap.of("l_shipdate", Domain.multipleValues(DATE,
+                        ImmutableList.of(LocalDate.of(1993, 1, 1).toEpochDay(), LocalDate.of(1997, 1, 1).toEpochDay()))));
+
+        ParquetDataSource filteredSource = new FileParquetDataSource(file, ParquetReaderOptions.defaultOptions());
+        ParquetMetadata filteredMetadata = MetadataReader.readFooter(filteredSource, Optional.empty());
+        List<Long> filteredRowNumbers = new ArrayList<>();
+        try (ParquetReader reader = createParquetReader(
+                filteredSource, filteredMetadata, ParquetReaderOptions.defaultOptions(),
+                newSimpleAggregatedMemoryContext(), types, columnNames, predicate, true)) {
+            int rowNumberColumnIndex = types.size();
+            SourcePage page = reader.nextPage();
+            while (page != null) {
+                Block dataBlock = page.getBlock(0);
+                Block rowNumberBlock = page.getBlock(rowNumberColumnIndex);
+                for (int i = 0; i < page.getPositionCount(); i++) {
+                    long rowNumber = BIGINT.getLong(rowNumberBlock, i);
+                    long dateValue = DATE.getLong(dataBlock, i);
+                    filteredRowNumbers.add(rowNumber);
+                    // The row number must point to a valid physical row
+                    assertThat(unfilteredRowData).containsKey(rowNumber);
+                    // The data at this row number must match what we read without filtering
+                    assertThat(dateValue)
+                            .describedAs("Data mismatch at physical row %d: column index filtering produced wrong row number", rowNumber)
+                            .isEqualTo(unfilteredRowData.get(rowNumber));
+                }
+                page = reader.nextPage();
+            }
+            // Verify column index filtering was actually active
+            Map<String, Metric<?>> metrics = reader.getMetrics().getMetrics();
+            assertThat(metrics).containsKey(COLUMN_INDEX_ROWS_FILTERED);
+            assertThat(((Count<?>) metrics.get(COLUMN_INDEX_ROWS_FILTERED)).getTotal()).isGreaterThan(0);
+        }
+        assertThat(filteredRowNumbers).isNotEmpty();
+
+        // Row numbers must be strictly monotonically increasing (physical file order)
+        for (int i = 1; i < filteredRowNumbers.size(); i++) {
+            assertThat(filteredRowNumbers.get(i))
+                    .describedAs("Row numbers must be monotonically increasing at index %d", i)
+                    .isGreaterThan(filteredRowNumbers.get(i - 1));
+        }
+
+        // Filtered results must be a strict subset of all rows
+        assertThat(filteredRowNumbers.size()).isLessThan(unfilteredRowData.size());
     }
 
     private void testReadingOldParquetFiles(File file, List<String> columnNames, Type columnType, List<?> expectedValues)

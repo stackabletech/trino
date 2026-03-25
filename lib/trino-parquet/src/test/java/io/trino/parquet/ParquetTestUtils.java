@@ -135,6 +135,20 @@ public class ParquetTestUtils
             TupleDomain<String> predicate)
             throws IOException
     {
+        return createParquetReader(input, parquetMetadata, options, memoryContext, types, columnNames, predicate, false);
+    }
+
+    public static ParquetReader createParquetReader(
+            ParquetDataSource input,
+            ParquetMetadata parquetMetadata,
+            ParquetReaderOptions options,
+            AggregatedMemoryContext memoryContext,
+            List<Type> types,
+            List<String> columnNames,
+            TupleDomain<String> predicate,
+            boolean appendRowNumberColumn)
+            throws IOException
+    {
         FileMetadata fileMetaData = parquetMetadata.getFileMetaData();
         MessageType fileSchema = fileMetaData.getSchema();
         MessageColumnIO messageColumnIO = getColumnIO(fileSchema, fileSchema);
@@ -165,7 +179,7 @@ public class ParquetTestUtils
         return new ParquetReader(
                 Optional.ofNullable(fileMetaData.getCreatedBy()),
                 columnFields.build(),
-                false,
+                appendRowNumberColumn,
                 rowGroups,
                 input,
                 UTC,

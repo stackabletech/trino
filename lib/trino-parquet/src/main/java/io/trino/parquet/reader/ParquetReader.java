@@ -147,6 +147,8 @@ public class ParquetReader
     private final FilteredRowRanges[] blockRowRanges;
     private final Function<Exception, RuntimeException> exceptionTransform;
     private final Map<String, Metric<?>> codecMetrics;
+    @Nullable
+    private FilteredRowRanges currentGroupFilteredRowRanges;
 
     private int currentPageId;
 
@@ -349,7 +351,7 @@ public class ParquetReader
             Block block = blocks[channel];
             if (block == null) {
                 if (channel == rowNumberColumnIndex) {
-                    block = selectedPositions.createRowNumberBlock(lastBatchStartRow());
+                    block = ParquetReader.this.createRowNumberBlock(selectedPositions);
                 }
                 else {
                     try {
@@ -445,7 +447,48 @@ public class ParquetReader
      */
     public long lastBatchStartRow()
     {
-        return firstRowIndexInGroup + nextRowInGroup - batchSize;
+        long filteredBatchStart = nextRowInGroup - batchSize;
+        if (currentGroupFilteredRowRanges == null) {
+            return firstRowIndexInGroup + filteredBatchStart;
+        }
+        return firstRowIndexInGroup + filteredToPhysicalRowIndex(filteredBatchStart);
+    }
+
+    /**
+     * Convert a filtered (logical) row index within the current row group to the
+     * physical row index, accounting for gaps introduced by column index filtering.
+     */
+    private long filteredToPhysicalRowIndex(long filteredIndex)
+    {
+        List<FilteredRowRanges.RowRange> ranges = currentGroupFilteredRowRanges.getRowRanges();
+        long remaining = filteredIndex;
+        for (FilteredRowRanges.RowRange range : ranges) {
+            long rangeSize = range.end() - range.start() + 1;
+            if (remaining < rangeSize) {
+                return range.start() + remaining;
+            }
+            remaining -= rangeSize;
+        }
+        throw new IllegalStateException(format("Filtered row index %d out of range for row ranges %s", filteredIndex, ranges));
+    }
+
+    /**
+     * Create a block of physical file row numbers for the current batch,
+     * correctly mapping filtered positions to physical positions when
+     * column index filtering is active.
+     */
+    private Block createRowNumberBlock(SelectedPositions selectedPositions)
+    {
+        if (currentGroupFilteredRowRanges == null) {
+            return selectedPositions.createRowNumberBlock(lastBatchStartRow());
+        }
+        long filteredBatchStart = nextRowInGroup - batchSize;
+        long[] rowNumbers = new long[selectedPositions.positionCount()];
+        for (int i = 0; i < selectedPositions.positionCount(); i++) {
+            int position = selectedPositions.positions() == null ? i : selectedPositions.positions()[i];
+            rowNumbers[i] = firstRowIndexInGroup + filteredToPhysicalRowIndex(filteredBatchStart + position);
+        }
+        return new LongArrayBlock(selectedPositions.positionCount(), Optional.empty(), rowNumbers);
     }
 
     private int nextBatch()
@@ -486,6 +529,7 @@ public class ParquetReader
         firstRowIndexInGroup = rowGroupInfo.fileRowOffset();
         currentGroupRowCount = currentBlockMetadata.getRowCount();
         FilteredRowRanges currentGroupRowRanges = blockRowRanges[currentRowGroup];
+        currentGroupFilteredRowRanges = currentGroupRowRanges;
         log.debug("advanceToNextRowGroup dataSource %s, currentRowGroup %d, rowRanges %s, currentBlockMetadata %s", dataSource.getId(), currentRowGroup, currentGroupRowRanges, currentBlockMetadata);
         if (currentGroupRowRanges != null) {
             long rowCount = currentGroupRowRanges.getRowCount();

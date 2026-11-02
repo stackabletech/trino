@@ -13,9 +13,12 @@
  */
 package io.trino.plugin.iceberg.catalog.rest;
 
+import com.google.common.net.HostAndPort;
 import io.trino.plugin.iceberg.TrinoMetricsReporter;
 import io.trino.spi.NodeVersion;
 import org.junit.jupiter.api.Test;
+
+import java.util.Map;
 
 import static org.apache.iceberg.CatalogUtil.loadMetricsReporter;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -32,5 +35,30 @@ final class TestIcebergRestCatalogPropertiesProvider
 
         assertThat(loadMetricsReporter(catalogPropertiesProvider.catalogProperties()))
                 .isInstanceOf(TrinoMetricsReporter.class);
+    }
+
+    @Test
+    void testHttpProxy()
+    {
+        IcebergRestCatalogPropertiesProvider withoutProxy = new IcebergRestCatalogPropertiesProvider(
+                new IcebergRestCatalogConfig().setBaseUri("http://localhost"),
+                new NoneSecurityProperties(),
+                new NodeVersion("test"));
+        assertThat(withoutProxy.catalogProperties().keySet())
+                .noneMatch(key -> key.startsWith("rest.client.proxy."));
+
+        IcebergRestCatalogPropertiesProvider withProxy = new IcebergRestCatalogPropertiesProvider(
+                new IcebergRestCatalogConfig()
+                        .setBaseUri("http://localhost")
+                        .setHttpProxy(HostAndPort.fromString("proxy.example.com:8080"))
+                        .setHttpProxyUsername("proxy-user")
+                        .setHttpProxyPassword("proxy-password"),
+                new NoneSecurityProperties(),
+                new NodeVersion("test"));
+        assertThat(withProxy.catalogProperties()).containsAllEntriesOf(Map.of(
+                "rest.client.proxy.hostname", "proxy.example.com",
+                "rest.client.proxy.port", "8080",
+                "rest.client.proxy.username", "proxy-user",
+                "rest.client.proxy.password", "proxy-password"));
     }
 }

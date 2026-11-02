@@ -14,7 +14,10 @@
 package io.trino.plugin.iceberg.catalog.rest;
 
 import com.google.common.collect.ImmutableMap;
+import com.google.common.net.HostAndPort;
 import io.airlift.units.Duration;
+import jakarta.validation.constraints.AssertTrue;
+import jakarta.validation.constraints.NotEmpty;
 import org.apache.iceberg.CatalogProperties;
 import org.junit.jupiter.api.Test;
 
@@ -24,6 +27,8 @@ import java.util.Map;
 import static io.airlift.configuration.testing.ConfigAssertions.assertFullMapping;
 import static io.airlift.configuration.testing.ConfigAssertions.assertRecordedDefaults;
 import static io.airlift.configuration.testing.ConfigAssertions.recordDefaults;
+import static io.airlift.testing.ValidationAssertions.assertFailsValidation;
+import static io.airlift.testing.ValidationAssertions.assertValidates;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -54,7 +59,10 @@ public class TestIcebergRestCatalogConfig
                 .setCaseInsensitiveNameMatchingCacheMaximumSize(10_000)
                 .setCaseInsensitiveNameMatchingNamespaceCacheEnabled(true)
                 .setCaseInsensitiveNameMatchingNamespaceCacheMaxSize(10_000)
-                .setHttpHeaders(List.of()));
+                .setHttpHeaders(List.of())
+                .setHttpProxy(null)
+                .setHttpProxyUsername(null)
+                .setHttpProxyPassword(null));
     }
 
     @Test
@@ -82,6 +90,9 @@ public class TestIcebergRestCatalogConfig
                 .put("iceberg.rest-catalog.case-insensitive-name-matching.namespace-cache.enabled", "false")
                 .put("iceberg.rest-catalog.case-insensitive-name-matching.namespace-cache.max-size", "50")
                 .put("iceberg.rest-catalog.http-headers", "Polaris-Realm: default-realm")
+                .put("iceberg.rest-catalog.http-proxy", "proxy.example.com:8080")
+                .put("iceberg.rest-catalog.http-proxy.username", "proxy-user")
+                .put("iceberg.rest-catalog.http-proxy.password", "proxy-password")
                 .buildOrThrow();
 
         IcebergRestCatalogConfig expected = new IcebergRestCatalogConfig()
@@ -105,8 +116,86 @@ public class TestIcebergRestCatalogConfig
                 .setCaseInsensitiveNameMatchingCacheMaximumSize(5000)
                 .setCaseInsensitiveNameMatchingNamespaceCacheEnabled(false)
                 .setCaseInsensitiveNameMatchingNamespaceCacheMaxSize(50)
-                .setHttpHeaders(List.of("Polaris-Realm: default-realm"));
+                .setHttpHeaders(List.of("Polaris-Realm: default-realm"))
+                .setHttpProxy(HostAndPort.fromString("proxy.example.com:8080"))
+                .setHttpProxyUsername("proxy-user")
+                .setHttpProxyPassword("proxy-password");
 
         assertFullMapping(properties, expected);
+    }
+
+    @Test
+    public void testHttpProxyValidation()
+    {
+        assertValidates(new IcebergRestCatalogConfig()
+                .setBaseUri("http://localhost:1234")
+                .setHttpProxy(HostAndPort.fromString("proxy.example.com:8080"))
+                .setHttpProxyUsername("proxy-user")
+                .setHttpProxyPassword("proxy-password"));
+
+        for (String httpProxy : List.of("proxy.example.com", ":8080", "http://proxy.example.com:8080")) {
+            assertFailsValidation(
+                    new IcebergRestCatalogConfig()
+                            .setBaseUri("http://localhost:1234")
+                            .setHttpProxy(HostAndPort.fromString(httpProxy)),
+                    "httpProxyFormatValid",
+                    "iceberg.rest-catalog.http-proxy must be in host:port format",
+                    AssertTrue.class);
+        }
+
+        assertFailsValidation(
+                new IcebergRestCatalogConfig()
+                        .setBaseUri("http://localhost:1234")
+                        .setHttpProxyUsername("proxy-user")
+                        .setHttpProxyPassword("proxy-password"),
+                "httpProxySetForCredentials",
+                "iceberg.rest-catalog.http-proxy must be set when iceberg.rest-catalog.http-proxy.username or iceberg.rest-catalog.http-proxy.password is set",
+                AssertTrue.class);
+
+        assertFailsValidation(
+                new IcebergRestCatalogConfig()
+                        .setBaseUri("http://localhost:1234")
+                        .setHttpProxyPassword("proxy-password"),
+                "httpProxySetForCredentials",
+                "iceberg.rest-catalog.http-proxy must be set when iceberg.rest-catalog.http-proxy.username or iceberg.rest-catalog.http-proxy.password is set",
+                AssertTrue.class);
+
+        assertFailsValidation(
+                new IcebergRestCatalogConfig()
+                        .setBaseUri("http://localhost:1234")
+                        .setHttpProxy(HostAndPort.fromString("proxy.example.com:8080"))
+                        .setHttpProxyUsername("proxy-user"),
+                "httpProxyCredentialsComplete",
+                "iceberg.rest-catalog.http-proxy.username and iceberg.rest-catalog.http-proxy.password must be set together",
+                AssertTrue.class);
+
+        assertFailsValidation(
+                new IcebergRestCatalogConfig()
+                        .setBaseUri("http://localhost:1234")
+                        .setHttpProxy(HostAndPort.fromString("proxy.example.com:8080"))
+                        .setHttpProxyPassword("proxy-password"),
+                "httpProxyCredentialsComplete",
+                "iceberg.rest-catalog.http-proxy.username and iceberg.rest-catalog.http-proxy.password must be set together",
+                AssertTrue.class);
+
+        assertFailsValidation(
+                new IcebergRestCatalogConfig()
+                        .setBaseUri("http://localhost:1234")
+                        .setHttpProxy(HostAndPort.fromString("proxy.example.com:8080"))
+                        .setHttpProxyUsername("")
+                        .setHttpProxyPassword("proxy-password"),
+                "httpProxyUsername",
+                "must not be empty",
+                NotEmpty.class);
+
+        assertFailsValidation(
+                new IcebergRestCatalogConfig()
+                        .setBaseUri("http://localhost:1234")
+                        .setHttpProxy(HostAndPort.fromString("proxy.example.com:8080"))
+                        .setHttpProxyUsername("proxy-user")
+                        .setHttpProxyPassword(""),
+                "httpProxyPassword",
+                "must not be empty",
+                NotEmpty.class);
     }
 }

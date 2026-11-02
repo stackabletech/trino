@@ -14,12 +14,16 @@
 package io.trino.plugin.iceberg.catalog.rest;
 
 import com.google.common.collect.ImmutableMap;
+import com.google.common.net.HostAndPort;
 import io.airlift.configuration.Config;
 import io.airlift.configuration.ConfigDescription;
+import io.airlift.configuration.ConfigSecuritySensitive;
 import io.airlift.configuration.DefunctConfig;
 import io.airlift.units.Duration;
 import io.airlift.units.MinDuration;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import org.apache.iceberg.CatalogProperties;
 
@@ -82,6 +86,9 @@ public class IcebergRestCatalogConfig
     private long caseInsensitiveNameMatchingCacheMaximumSize = 10_000;
     private boolean caseInsensitiveNameMatchingNamespaceCacheEnabled = true;
     private long caseInsensitiveNameMatchingNamespaceCacheMaxSize = 10_000;
+    private Optional<HostAndPort> httpProxy = Optional.empty();
+    private Optional<String> httpProxyUsername = Optional.empty();
+    private Optional<String> httpProxyPassword = Optional.empty();
 
     @NotNull
     public URI getBaseUri()
@@ -375,5 +382,63 @@ public class IcebergRestCatalogConfig
     {
         this.caseInsensitiveNameMatchingNamespaceCacheMaxSize = caseInsensitiveNameMatchingNamespaceCacheMaxSize;
         return this;
+    }
+
+    public Optional<HostAndPort> getHttpProxy()
+    {
+        return httpProxy;
+    }
+
+    @Config("iceberg.rest-catalog.http-proxy")
+    @ConfigDescription("HTTP proxy to use for requests to the REST catalog server, in host:port format")
+    public IcebergRestCatalogConfig setHttpProxy(HostAndPort httpProxy)
+    {
+        this.httpProxy = Optional.ofNullable(httpProxy);
+        return this;
+    }
+
+    public Optional<@NotEmpty String> getHttpProxyUsername()
+    {
+        return httpProxyUsername;
+    }
+
+    @Config("iceberg.rest-catalog.http-proxy.username")
+    @ConfigDescription("Username for basic authentication with the HTTP proxy")
+    public IcebergRestCatalogConfig setHttpProxyUsername(String httpProxyUsername)
+    {
+        this.httpProxyUsername = Optional.ofNullable(httpProxyUsername);
+        return this;
+    }
+
+    public Optional<@NotEmpty String> getHttpProxyPassword()
+    {
+        return httpProxyPassword;
+    }
+
+    @Config("iceberg.rest-catalog.http-proxy.password")
+    @ConfigSecuritySensitive
+    @ConfigDescription("Password for basic authentication with the HTTP proxy")
+    public IcebergRestCatalogConfig setHttpProxyPassword(String httpProxyPassword)
+    {
+        this.httpProxyPassword = Optional.ofNullable(httpProxyPassword);
+        return this;
+    }
+
+    @AssertTrue(message = "iceberg.rest-catalog.http-proxy must be in host:port format")
+    public boolean isHttpProxyFormatValid()
+    {
+        return httpProxy.map(proxy -> !proxy.getHost().isEmpty() && proxy.hasPort()).orElse(true);
+    }
+
+    @AssertTrue(message = "iceberg.rest-catalog.http-proxy must be set when iceberg.rest-catalog.http-proxy.username or iceberg.rest-catalog.http-proxy.password is set")
+    public boolean isHttpProxySetForCredentials()
+    {
+        return httpProxy.isPresent() || (httpProxyUsername.isEmpty() && httpProxyPassword.isEmpty());
+    }
+
+    @AssertTrue(message = "iceberg.rest-catalog.http-proxy.username and iceberg.rest-catalog.http-proxy.password must be set together")
+    public boolean isHttpProxyCredentialsComplete()
+    {
+        return httpProxyUsername.isPresent() == httpProxyPassword.isPresent();
     }
 }

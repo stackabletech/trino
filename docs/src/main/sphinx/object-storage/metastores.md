@@ -586,6 +586,22 @@ following properties:
 * - `iceberg.rest-catalog.http-headers`
   - Additional *non-sensitive* HTTP headers to include with requests to the REST catalog.
     Example: `Header-1: value 1, Header-2: value 2`.
+* - `iceberg.rest-catalog.http-proxy`
+  - HTTP proxy server to use for requests to the REST catalog, in `host:port`
+    format. Example: `proxy.example.com:3128`. With `OAUTH2` security, token
+    requests to `iceberg.rest-catalog.oauth2.server-uri` also use this proxy.
+    Access to object storage does not use this proxy. Configure it separately,
+    for example with `s3.http-proxy`. Google access token requests with `GOOGLE`
+    security and AWS STS requests with `SIGV4` security do not use this proxy
+    either.
+* - `iceberg.rest-catalog.http-proxy.username`
+  - Username for basic authentication with the HTTP proxy. Requires
+    `iceberg.rest-catalog.http-proxy` and
+    `iceberg.rest-catalog.http-proxy.password`.
+* - `iceberg.rest-catalog.http-proxy.password`
+  - Password for basic authentication with the HTTP proxy. Requires
+    `iceberg.rest-catalog.http-proxy` and
+    `iceberg.rest-catalog.http-proxy.username`.
   :::
 
 The following example shows a minimal catalog configuration using an Iceberg

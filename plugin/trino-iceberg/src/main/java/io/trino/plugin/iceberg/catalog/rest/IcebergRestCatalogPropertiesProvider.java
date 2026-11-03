@@ -57,6 +57,13 @@ public class IcebergRestCatalogPropertiesProvider
         restConfig.getSocketTimeout().ifPresent(timeout -> properties.put("rest.client.socket-timeout-ms", String.valueOf(timeout.toMillis())));
         // Hardcoded literal because org.apache.iceberg.rest.HTTPClient.REST_MAX_RETRIES is private.
         properties.put("rest.client.max-retries", String.valueOf(restConfig.getMaxRetries()));
+        // Hardcoded literals because the org.apache.iceberg.rest.HTTPClient.REST_PROXY_* constants are package-private.
+        restConfig.getHttpProxy().ifPresent(proxy -> {
+            properties.put("rest.client.proxy.hostname", proxy.getHost());
+            properties.put("rest.client.proxy.port", String.valueOf(proxy.getPort()));
+        });
+        restConfig.getHttpProxyUsername().ifPresent(username -> properties.put("rest.client.proxy.username", username));
+        restConfig.getHttpProxyPassword().ifPresent(password -> properties.put("rest.client.proxy.password", password));
         properties.putAll(securityProperties.get());
         if (restConfig.isVendedCredentialsEnabled()) {
             properties.put("header.X-Iceberg-Access-Delegation", "vended-credentials");
